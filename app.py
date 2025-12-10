@@ -29,8 +29,6 @@ try:
     EMAIL_USE_TLS = bool(email_conf.get("use_tls", True))
     PRACTITIONER_EMAIL = EMAIL_SENDER  # même adresse par défaut
 except Exception:
-    # Si les secrets ne sont pas configurés, on désactive l'email,
-    # mais on laisse l'application fonctionner.
     EMAIL_ENABLED = False
     EMAIL_HOST = ""
     EMAIL_PORT = 0
@@ -49,7 +47,6 @@ def send_email_to_practitioner(code, total_score, subscales, meta_info):
     """Envoie un email automatique au praticien (si configuré)."""
 
     if not EMAIL_ENABLED:
-        # On ne bloque pas l'app si les emails ne sont pas configurés
         return
 
     try:
@@ -88,7 +85,7 @@ def send_email_to_practitioner(code, total_score, subscales, meta_info):
 
 
 # ==========================
-# ITEMS
+# ITEMS + CATÉGORIES
 # ==========================
 ECC_ITEMS = {
     1: "Lorsque je regarde une scène ou une image, je remarque d’abord les petits détails avant l’ensemble.",
@@ -117,11 +114,22 @@ ECC_ITEMS = {
     24: "Je préfère analyser séparément chaque élément.",
 }
 
+ITEM_CATEGORY = {}
+for i in range(1, 7):
+    ITEM_CATEGORY[i] = "Préférence pour les détails"
+for i in range(7, 13):
+    ITEM_CATEGORY[i] = "Difficulté d’intégration globale"
+for i in range(13, 19):
+    ITEM_CATEGORY[i] = "Sensibilité / résistance au contexte"
+for i in range(19, 25):
+    ITEM_CATEGORY[i] = "Flexibilité globale-locale"
+
 
 # ==========================
 # SCORING
 # ==========================
 def compute_scores(responses_numeric):
+    # 24 items, échelle 0–3 → total 0–72, sous-scores 0–18
     total = sum(responses_numeric.values())
     A = sum(responses_numeric[i] for i in range(1, 7))
     B = sum(responses_numeric[i] for i in range(7, 13))
@@ -134,6 +142,23 @@ def compute_scores(responses_numeric):
         "C_context": C,
         "D_flexibility": D,
     }
+
+
+def interpret_total(total):
+    """
+    Renvoie une phrase de synthèse pour le degré de cohérence centrale.
+    Seuils adaptés à un max de 72 (24 x 3) :
+    anciens seuils 20/40/60/80 → 15/30/45/60.
+    """
+    if total <= 15:
+        return "Niveau 1 – Cohérence centrale très forte (profil très global, centrage sur le sens et la gestalt)."
+    if total <= 30:
+        return "Niveau 2 – Cohérence centrale plutôt globale."
+    if total <= 45:
+        return "Niveau 3 – Équilibre global/local."
+    if total <= 60:
+        return "Niveau 4 – Cohérence centrale plutôt locale (profil détailliste)."
+    return "Niveau 5 – Cohérence centrale très locale / faible cohérence centrale (traitement très fragmenté)."
 
 
 # ==========================
@@ -160,18 +185,6 @@ def load_response_by_code(code):
     if sub.empty:
         return None
     return sub.iloc[0]
-
-
-def interpret_total(total):
-    if total <= 20:
-        return "Cohérence centrale très forte (vision globale)."
-    if total <= 40:
-        return "Cohérence centrale plutôt globale."
-    if total <= 60:
-        return "Équilibre global/local."
-    if total <= 80:
-        return "Cohérence centrale plutôt locale."
-    return "Cohérence centrale très locale."
 
 
 # ==========================
@@ -202,17 +215,23 @@ if mode == "Passation (patient)":
         st.markdown("---")
         st.subheader("Questions")
 
-        labels = ["Sélectionnez...", "Jamais", "Rarement", "Parfois", "Souvent", "Toujours"]
-        score_map = {"Jamais": 0, "Rarement": 1, "Parfois": 2, "Souvent": 3, "Toujours": 4}
+        # 4 degrés de réponse (0–3)
+        labels = ["Jamais", "Parfois", "Souvent", "Toujours"]
+        score_map = {"Jamais": 0, "Parfois": 1, "Souvent": 2, "Toujours": 3}
 
         raw = {}
         for i in range(1, 25):
-            raw[i] = st.radio(f"{i}. {ECC_ITEMS[i]}", labels, index=0)
+            raw[i] = st.radio(
+                f"{i}. {ECC_ITEMS[i]}",
+                labels,
+                index=None,  # pas de valeur par défaut → obligation de réponse
+                key=f"q{i}",
+            )
 
         submit = st.form_submit_button("Envoyer mes réponses")
 
     if submit:
-        if any(v == "Sélectionnez..." for v in raw.values()):
+        if any(v is None for v in raw.values()):
             st.error("Merci de répondre à toutes les questions.")
         else:
             numeric = {i: score_map[raw[i]] for i in raw}
@@ -274,12 +293,12 @@ elif mode == "Espace praticien":
                 st.success("Passation trouvée.")
 
                 numeric = {}
-                labels = {}
+                labels_raw = {}
                 for i in range(1, 25):
                     sc = f"Q{i}_score"
                     lb = f"Q{i}_label"
                     numeric[i] = int(row[sc])
-                    labels[i] = row[lb]
+                    labels_raw[i] = row[lb]
 
                 total, subs = compute_scores(numeric)
 
@@ -290,29 +309,44 @@ elif mode == "Espace praticien":
                 st.write(f"Email patient : {row['email_patient']}")
 
                 st.markdown("---")
-                st.subheader("Scores")
+                st.subheader("Scores globaux")
 
-                st.metric("Score total", total)
+                st.metric("Score total (0–72)", total)
                 st.write(interpret_total(total))
 
-                st.write(f"Préférence détails : {subs['A_details']} / 24")
-                st.write(f"Intégration globale : {subs['B_global']} / 24")
-                st.write(f"Sensibilité contexte : {subs['C_context']} / 24")
-                st.write(f"Flexibilité globale-locale : {subs['D_flexibility']} / 24")
+                st.markdown("**Sous-scores par dimension (0–18)**")
+                st.write(f"- Préférence pour les détails (items 1–6) : {subs['A_details']} / 18")
+                st.write(f"- Difficulté d’intégration globale (7–12) : {subs['B_global']} / 18")
+                st.write(f"- Sensibilité / résistance au contexte (13–18) : {subs['C_context']} / 18")
+                st.write(f"- Flexibilité globale-locale (19–24) : {subs['D_flexibility']} / 18")
+
+                st.markdown(
+                    "_Plus le score total et les sous-scores sont élevés, plus le style de traitement est local, "
+                    "détailliste, avec une cohérence centrale faible. À lire en fonction du profil global (TSA, HPI, anxiété, etc.)._"
+                )
 
                 st.markdown("---")
-                st.subheader("Détail des réponses")
+                st.subheader("Détail des réponses par item et par catégorie")
 
                 df = pd.DataFrame(
                     [
                         {
                             "Item": i,
+                            "Catégorie": ITEM_CATEGORY[i],
                             "Énoncé": ECC_ITEMS[i],
-                            "Réponse": labels[i],
-                            "Score": numeric[i],
+                            "Réponse": labels_raw[i],
+                            "Score (0–3)": numeric[i],
                         }
                         for i in range(1, 25)
                     ]
                 )
 
+                # tri par catégorie puis item
+                df = df.sort_values(by=["Catégorie", "Item"]).reset_index(drop=True)
+
                 st.dataframe(df, use_container_width=True)
+
+                st.markdown(
+                    "Ce questionnaire explore le style de traitement de l’information (global vs local). "
+                    "Il ne remplace ni un bilan neuropsychologique, ni un diagnostic, mais peut étayer vos hypothèses cliniques."
+                )
