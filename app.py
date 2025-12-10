@@ -18,10 +18,11 @@ st.set_page_config(
 
 # ==========================
 # PARAMÈTRES EMAIL / FICHIER
+# (récupérés via st.secrets sur Streamlit Cloud)
 # ==========================
-EMAIL_SENDER = "beatricemilletre@gmail.com"           # expéditeur (Gmail)
-EMAIL_APP_PASSWORD = "kogr txhm bpkf wihb"           # mot de passe d’application Gmail
-PRACTITIONER_EMAIL = "beatricemilletre@gmail.com"    # destinataire (praticien)
+EMAIL_SENDER = st.secrets["EMAIL_SENDER"]
+EMAIL_APP_PASSWORD = st.secrets["EMAIL_APP_PASSWORD"]
+PRACTITIONER_EMAIL = st.secrets["PRACTITIONER_EMAIL"]
 
 DATA_FILE = "ecc_data.csv"  # fichier local de stockage des réponses
 
@@ -74,7 +75,6 @@ def send_email_to_practitioner(code, total_score, subscales, meta_info):
 
 # ==========================
 # ITEMS DU QUESTIONNAIRE ECC-24
-# (sans catégories visibles pour le patient)
 # ==========================
 ECC_ITEMS = {
     1: "Lorsque je regarde une scène ou une image, je remarque d’abord les petits détails avant l’ensemble.",
@@ -115,10 +115,10 @@ def compute_scores(responses_numeric):
     total_score = sum(responses_numeric.values())
 
     # Sous-échelles par tranches d’items
-    A_details = sum(responses_numeric[i] for i in range(1, 7))       # 1–6
-    B_global = sum(responses_numeric[i] for i in range(7, 13))      # 7–12
-    C_context = sum(responses_numeric[i] for i in range(13, 19))    # 13–18
-    D_flexibility = sum(responses_numeric[i] for i in range(19, 25))# 19–24
+    A_details = sum(responses_numeric[i] for i in range(1, 7))        # 1–6
+    B_global = sum(responses_numeric[i] for i in range(7, 13))       # 7–12
+    C_context = sum(responses_numeric[i] for i in range(13, 19))     # 13–18
+    D_flexibility = sum(responses_numeric[i] for i in range(19, 25)) # 19–24
 
     subscales = {
         "A_details": A_details,
@@ -141,7 +141,6 @@ def save_response(record):
             df_old = pd.read_csv(DATA_FILE)
             df_all = pd.concat([df_old, df_new], ignore_index=True)
         except Exception:
-            # Si souci de lecture, on repart à zéro pour ne pas tout bloquer
             df_all = df_new
     else:
         df_all = df_new
@@ -204,208 +203,3 @@ if mode == "Passation (patient)":
 Ce questionnaire vise à mieux comprendre **votre manière naturelle de percevoir et d’organiser les informations**.  
 Il n’y a pas de bonne ou de mauvaise réponse. Répondez le plus honnêtement possible à partir de votre expérience habituelle.
 """
-    )
-
-    with st.form("ecc_patient_form"):
-        st.subheader("Informations générales (facultatif)")
-
-        prenom = st.text_input("Prénom ou pseudo (facultatif)")
-        age = st.number_input("Âge", min_value=8, max_value=99, value=18, step=1)
-        email_patient = st.text_input("Votre email (facultatif, non transmis à d’autres personnes)")
-
-        st.markdown("---")
-        st.subheader("Vos réponses")
-
-        st.write(
-            """
-Pour chaque affirmation, cochez la réponse qui vous correspond le mieux en général.
-"""
-        )
-
-        response_labels = [
-            "Sélectionnez...",
-            "Jamais",
-            "Rarement",
-            "Parfois",
-            "Souvent",
-            "Toujours",
-        ]
-        label_to_score = {
-            "Jamais": 0,
-            "Rarement": 1,
-            "Parfois": 2,
-            "Souvent": 3,
-            "Toujours": 4,
-        }
-
-        responses_raw = {}
-        for i in range(1, 25):
-            question = ECC_ITEMS[i]
-            choice = st.radio(
-                f"{i}. {question}",
-                response_labels,
-                index=0,
-                key=f"q{i}",
-            )
-            responses_raw[i] = choice
-
-        submitted = st.form_submit_button("Envoyer mes réponses")
-
-    if submitted:
-        # Vérifier que tout est bien rempli
-        if any(ans == "Sélectionnez..." for ans in responses_raw.values()):
-            st.error("Merci de répondre à toutes les questions avant de valider.")
-        else:
-            # Conversion en scores numériques
-            responses_numeric = {
-                i: label_to_score[responses_raw[i]] for i in responses_raw
-            }
-
-            total_score, subscales = compute_scores(responses_numeric)
-
-            # Génération d’un code unique
-            code = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:4].upper()
-
-            timestamp = datetime.now().isoformat(timespec="seconds")
-
-            # Préparation de l’enregistrement
-            record = {
-                "timestamp": timestamp,
-                "code": code,
-                "prenom": prenom,
-                "age": age,
-                "email_patient": email_patient,
-                "total_score": total_score,
-                "A_details": subscales["A_details"],
-                "B_global": subscales["B_global"],
-                "C_context": subscales["C_context"],
-                "D_flexibility": subscales["D_flexibility"],
-            }
-
-            # Ajout des réponses item par item
-            for i in range(1, 25):
-                record[f"Q{i}"] = responses_numeric[i]
-
-            # Sauvegarde locale
-            save_response(record)
-
-            # Envoi email au praticien
-            meta = {
-                "timestamp": timestamp,
-                "prenom": prenom,
-                "age": age,
-                "email_patient": email_patient,
-            }
-            send_email_to_practitioner(code, total_score, subscales, meta)
-
-            # Feedback patient (sans sous-échelles, sans interprétation fine)
-            st.success("Vos réponses ont été enregistrées.")
-
-            st.info(
-                f"""
-Votre code questionnaire est : **{code}**  
-
-Conservez ce code : il permettra à votre praticien de retrouver vos réponses et d’en discuter avec vous lors de la séance.
-"""
-            )
-
-            st.write(
-                """
-Ce questionnaire ne constitue pas en soi un diagnostic.  
-Les résultats doivent être interprétés par un professionnel formé, dans le cadre d’un entretien clinique.
-"""
-            )
-
-
-# ==========================
-# MODE PRATICIEN
-# ==========================
-elif mode == "Espace praticien":
-    st.title("👩‍⚕️ Espace praticien – Cohérence centrale (ECC-24)")
-
-    st.write(
-        """
-Cet espace vous permet de retrouver les passations réalisées à l’aide du **code questionnaire** communiqué par le patient.  
-Vous pouvez consulter les réponses détaillées, les sous-scores et une interprétation indicative.
-"""
-    )
-
-    code_input = st.text_input("Code questionnaire (fourni par le patient)")
-
-    if st.button("Charger les résultats"):
-        code_input = code_input.strip()
-        if not code_input:
-            st.error("Merci de saisir un code.")
-        else:
-            row = load_response_by_code(code_input)
-            if row is None:
-                st.error("Aucune passation trouvée pour ce code.")
-            else:
-                st.success("Passation trouvée.")
-
-                # Affichage des métadonnées
-                st.subheader("Informations générales")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.write(f"**Date** : {row.get('timestamp', 'N/A')}")
-                    st.write(f"**Code** : {row.get('code', 'N/A')}")
-                with col2:
-                    st.write(f"**Prénom/pseudo** : {row.get('prenom', 'N/A')}")
-                    st.write(f"**Âge** : {row.get('age', 'N/A')}")
-                with col3:
-                    st.write(f"**Email patient** : {row.get('email_patient', 'N/A')}")
-
-                # Scores
-                total_score = row["total_score"]
-                A_details = row["A_details"]
-                B_global = row["B_global"]
-                C_context = row["C_context"]
-                D_flexibility = row["D_flexibility"]
-
-                st.markdown("---")
-                st.subheader("Scores")
-
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.metric("Score total ECC-24", f"{int(total_score)}")
-                    st.write(interpret_total_score(total_score))
-                with col_b:
-                    st.write("**Sous-scores (0–24 chacun)**")
-                    st.write(f"- Préférence pour les détails (1–6) : **{int(A_details)}**")
-                    st.write(f"- Intégration globale (7–12) : **{int(B_global)}**")
-                    st.write(f"- Sensibilité au contexte (13–18) : **{int(C_context)}**")
-                    st.write(f"- Flexibilité globale-locale (19–24) : **{int(D_flexibility)}**")
-
-                st.markdown(
-                    """
-*Plus le score est élevé, plus le style de traitement tend vers un profil détailliste / local.*  
-À interpréter en regard du fonctionnement global (TSA, HPI, anxiété, etc.).
-"""
-                )
-
-                # Détail des réponses
-                st.markdown("---")
-                st.subheader("Détail des réponses item par item")
-
-                data_items = []
-                for i in range(1, 25):
-                    q_text = ECC_ITEMS[i]
-                    score = int(row[f"Q{i}"])
-                    data_items.append(
-                        {
-                            "Item": i,
-                            "Énoncé": q_text,
-                            "Score (0–4)": score,
-                        }
-                    )
-
-                df_items = pd.DataFrame(data_items)
-                st.dataframe(df_items, use_container_width=True)
-
-                st.markdown(
-                    """
-**Rappel clinique** :  
-Ce questionnaire est un outil d’exploration du style de traitement de l’information (global vs local).  
-Il ne remplace ni une évaluation neuropsychologique ni un diagnostic, mais peut éclairer vos hypothèses cliniques, notamment en contexte TSA / HPI.
-"""
-                )
