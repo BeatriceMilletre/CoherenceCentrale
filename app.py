@@ -19,9 +19,25 @@ st.set_page_config(
 # ==========================
 # PARAMÈTRES EMAIL / FICHIER
 # ==========================
-EMAIL_SENDER = st.secrets["EMAIL_SENDER"]
-EMAIL_APP_PASSWORD = st.secrets["EMAIL_APP_PASSWORD"]
-PRACTITIONER_EMAIL = st.secrets["PRACTITIONER_EMAIL"]
+EMAIL_ENABLED = True
+try:
+    email_conf = st.secrets["email"]
+    EMAIL_HOST = email_conf.get("host", "smtp.gmail.com")
+    EMAIL_PORT = int(email_conf.get("port", 587))
+    EMAIL_SENDER = email_conf.get("username")
+    EMAIL_PASSWORD = email_conf.get("password")
+    EMAIL_USE_TLS = bool(email_conf.get("use_tls", True))
+    PRACTITIONER_EMAIL = EMAIL_SENDER  # même adresse par défaut
+except Exception:
+    # Si les secrets ne sont pas configurés, on désactive l'email,
+    # mais on laisse l'application fonctionner.
+    EMAIL_ENABLED = False
+    EMAIL_HOST = ""
+    EMAIL_PORT = 0
+    EMAIL_SENDER = ""
+    EMAIL_PASSWORD = ""
+    EMAIL_USE_TLS = False
+    PRACTITIONER_EMAIL = ""
 
 DATA_FILE = "ecc_data.csv"
 
@@ -30,7 +46,11 @@ DATA_FILE = "ecc_data.csv"
 # FONCTION D’ENVOI D’EMAIL
 # ==========================
 def send_email_to_practitioner(code, total_score, subscales, meta_info):
-    """Envoie un email automatique au praticien."""
+    """Envoie un email automatique au praticien (si configuré)."""
+
+    if not EMAIL_ENABLED:
+        # On ne bloque pas l'app si les emails ne sont pas configurés
+        return
 
     try:
         subject = f"[ECC] Nouvelle passation – Code {code}"
@@ -57,9 +77,10 @@ def send_email_to_practitioner(code, total_score, subscales, meta_info):
         msg["Subject"] = subject
         msg.attach(MIMEText(body, "plain", "utf-8"))
 
-        # Bloc correct
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_APP_PASSWORD)
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+            if EMAIL_USE_TLS:
+                server.starttls()
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
             server.send_message(msg)
 
     except Exception as e:
@@ -124,7 +145,7 @@ def save_response(record):
         try:
             df_old = pd.read_csv(DATA_FILE)
             df_all = pd.concat([df_old, df_new], ignore_index=True)
-        except:
+        except Exception:
             df_all = df_new
     else:
         df_all = df_new
@@ -169,7 +190,9 @@ mode = st.sidebar.radio(
 if mode == "Passation (patient)":
 
     st.title("🧩 Questionnaire – Cohérence centrale (ECC-24)")
-    st.write("Répondez selon votre fonctionnement habituel. Aucune bonne ou mauvaise réponse.")
+    st.write(
+        "Répondez selon votre fonctionnement habituel. Il n’y a pas de bonne ou de mauvaise réponse."
+    )
 
     with st.form("ecc_form"):
         prenom = st.text_input("Prénom / Pseudo (facultatif)")
@@ -223,6 +246,11 @@ if mode == "Passation (patient)":
             st.success("Réponses enregistrées.")
             st.info(f"Votre code à transmettre au praticien : **{code}**")
 
+            st.write(
+                "Ce questionnaire ne constitue pas un diagnostic. "
+                "Les résultats doivent être interprétés par un professionnel dans le cadre d’un entretien clinique."
+            )
+
 
 # ==========================
 # MODE PRATICIEN
@@ -234,52 +262,57 @@ elif mode == "Espace praticien":
     code_input = st.text_input("Code questionnaire du patient")
 
     if st.button("Charger"):
-        row = load_response_by_code(code_input.strip())
-
-        if row is None:
-            st.error("Aucune passation trouvée.")
+        code_clean = code_input.strip()
+        if not code_clean:
+            st.error("Merci de saisir un code.")
         else:
-            st.success("Passation trouvée.")
+            row = load_response_by_code(code_clean)
 
-            # Reconstruire les scores
-            numeric = {}
-            labels = {}
-            for i in range(1, 25):
-                sc = f"Q{i}_score"
-                lb = f"Q{i}_label"
-                numeric[i] = int(row[sc])
-                labels[i] = row[lb]
+            if row is None:
+                st.error("Aucune passation trouvée pour ce code.")
+            else:
+                st.success("Passation trouvée.")
 
-            total, subs = compute_scores(numeric)
+                numeric = {}
+                labels = {}
+                for i in range(1, 25):
+                    sc = f"Q{i}_score"
+                    lb = f"Q{i}_label"
+                    numeric[i] = int(row[sc])
+                    labels[i] = row[lb]
 
-            st.subheader("Informations générales")
-            st.write(f"Date : {row['timestamp']}")
-            st.write(f"Prénom/pseudo : {row['prenom']}")
-            st.write(f"Âge : {row['age']}")
-            st.write(f"Email patient : {row['email_patient']}")
+                total, subs = compute_scores(numeric)
 
-            st.markdown("---")
-            st.subheader("Scores")
+                st.subheader("Informations générales")
+                st.write(f"Date : {row['timestamp']}")
+                st.write(f"Prénom/pseudo : {row['prenom']}")
+                st.write(f"Âge : {row['age']}")
+                st.write(f"Email patient : {row['email_patient']}")
 
-            st.metric("Score total", total)
-            st.write(interpret_total(total))
+                st.markdown("---")
+                st.subheader("Scores")
 
-            st.write(f"Préférence détails : {subs['A_details']} / 24")
-            st.write(f"Intégration globale : {subs['B_global']} / 24")
-            st.write(f"Sensibilité contexte : {subs['C_context']} / 24")
-            st.write(f"Flexibilité globale-locale : {subs['D_flexibility']} / 24")
+                st.metric("Score total", total)
+                st.write(interpret_total(total))
 
-            st.markdown("---")
-            st.subheader("Détail des réponses")
+                st.write(f"Préférence détails : {subs['A_details']} / 24")
+                st.write(f"Intégration globale : {subs['B_global']} / 24")
+                st.write(f"Sensibilité contexte : {subs['C_context']} / 24")
+                st.write(f"Flexibilité globale-locale : {subs['D_flexibility']} / 24")
 
-            df = pd.DataFrame([
-                {
-                    "Item": i,
-                    "Énoncé": ECC_ITEMS[i],
-                    "Réponse": labels[i],
-                    "Score": numeric[i],
-                }
-                for i in range(1, 25)
-            ])
+                st.markdown("---")
+                st.subheader("Détail des réponses")
 
-            st.dataframe(df, use_container_width=True)
+                df = pd.DataFrame(
+                    [
+                        {
+                            "Item": i,
+                            "Énoncé": ECC_ITEMS[i],
+                            "Réponse": labels[i],
+                            "Score": numeric[i],
+                        }
+                        for i in range(1, 25)
+                    ]
+                )
+
+                st.dataframe(df, use_container_width=True)
